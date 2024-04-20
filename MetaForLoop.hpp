@@ -40,44 +40,72 @@
 #include "tbb/blocked_range.h"
 #include "tbb/parallel_for.h"
 
+namespace MetaForLoop {
+
 template<class Callable, std::incrementable Counter, std::convertible_to<Counter> ...C>
 constexpr void metaForLoop(Callable&& functToExecute, Counter start, Counter end, C&&... limits) {
     constexpr std::size_t nPar = sizeof...(C);
-    static_assert(!(nPar % 2));
-    for (Counter i = start; i != end; ++i) {
-        if constexpr (nPar == 0) {
+    static_assert( !(nPar%2) );
+    for(Counter i = start; i != end; ++i) {
+        if constexpr(nPar == 0) {
             functToExecute(i);
-        }
-        else {
+        } else {
             auto bind_an_argument = [i, &functToExecute](auto... args) {
                 functToExecute(i, args...);
             };
             metaForLoop(bind_an_argument, limits...);
         }
-    };
+    }
 }
+
 template<class Callable, std::incrementable Counter, std::convertible_to<Counter> ...C>
-constexpr void metaForLoopParallel(Callable&& functToExecute, Counter start, Counter end, C&&...limits) {
+constexpr void metaForLoopParallel(Callable&& functToExecute, Counter start0, Counter end0, Counter start1, Counter end1, Counter start2, Counter end2, C&&...limits) {
     constexpr std::size_t nPar = sizeof...(C);
-    static_assert(!(nPar % 2));
+    static_assert( !(nPar% 2) );
     tbb::parallel_for(
-        tbb::blocked_range<Counter>(start, end),
-        [&](tbb::blocked_range<Counter> range) {
-            for (auto i = range.begin(); i < range.end(); ++i) {
-                if constexpr (nPar == 0) {
-                    functToExecute(i);
-                }
-                else {
-                    auto bind_an_argument = [i, &functToExecute](auto... args) {
-                        functToExecute(i, args...);
-                    };
-
-                    metaForLoopParallel(bind_an_argument, limits...);
-                }
-            }
-        }
-    );
+                      tbb::blocked_range3d<Counter>(start0, end0, start1, end1, start2, end2),
+                      [&](tbb::blocked_range3d<Counter> range) {
+                          for(auto i=range.pages().begin(); i<range.pages().end(); i++){
+                              for(auto j=range.rows().begin(); j<range.rows().end(); j++){
+                                  for(auto k=range.cols().begin(); k<range.cols().end(); k++){
+                                      if constexpr(nPar == 0) {
+                                          functToExecute(i,j,k);
+                                      } else {
+                                          auto bind_an_argument = [i,j,k, &functToExecute](auto... args) {
+                                              functToExecute(i,j,k, args...);
+                                          };
+                                          metaForLoopParallel(bind_an_argument, limits...);
+                                      }
+                                  }
+                              }
+                          }
+                      });
 }
 
+template<class Callable, std::incrementable Counter>
+constexpr void metaForLoopParallel(Callable&& functToExecute, Counter start0, Counter end0, Counter start1, Counter end1) {
+    tbb::parallel_for(
+                      tbb::blocked_range2d<Counter>(start0, end0, start1, end1),
+                      [&](tbb::blocked_range2d<Counter> range) {
+                          for(auto i=range.rows().begin(); i<range.rows().end(); i++){
+                              for(auto j=range.cols().begin(); j<range.cols().end(); j++){
+                                    functToExecute(i,j);
+                              }
+                          }
+                      });
+}
+
+template<class Callable, std::incrementable Counter>
+constexpr void metaForLoopParallel(Callable&& functToExecute, Counter start0, Counter end0) {
+    tbb::parallel_for(
+                      tbb::blocked_range<Counter>(start0, end0),
+                      [&](tbb::blocked_range<Counter> range) {
+                          for(auto i=range.begin(); i<range.end(); ++i) {
+                                functToExecute(i);
+                          }
+                      });
+}
+
+} // namespace MetaForLoop
 
 #endif /* MetaForLoop_hpp */
