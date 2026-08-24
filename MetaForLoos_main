@@ -1,0 +1,64 @@
+//
+//  main.cpp
+//  MetaForLoop
+//
+//  Created by Marco Battiato on 20/4/24.
+//
+//  Demonstration of compile-time generated nested loops.
+//
+//  The nesting depth is determined by how many (begin, end) pairs are passed, so a
+//  single call site can express an iteration space whose dimensionality is a template
+//  parameter rather than something hard-coded in the source.
+//
+
+#include "MetaForLoop.hpp"
+
+#include <atomic>
+#include <iostream>
+#include <vector>
+
+using namespace MetaForLoop;
+
+int main() {
+
+    // ---- Serial: three nested levels from one call -------------------------------
+
+    std::cout << "metaForLoop(f, 0,2, 0,2, 0,3) visits:\n";
+    metaForLoop([](int i, int j, int k) {
+        std::cout << "  (" << i << ", " << j << ", " << k << ")\n";
+    }, 0, 2, 0, 2, 0, 3);
+    std::cout << "\n";
+
+    // ---- The depth can vary without changing the call site -----------------------
+
+    // Flattening a 4-dimensional index space into a linear buffer. Writing this with
+    // hand-written loops would mean four levels of nesting spelled out explicitly.
+    constexpr int n0 = 3, n1 = 4, n2 = 5, n3 = 6;
+    std::vector<double> buffer(n0 * n1 * n2 * n3);
+
+    metaForLoop([&](int i, int j, int k, int l) {
+        buffer[((i * n1 + j) * n2 + k) * n3 + l] = i + 0.1 * j + 0.01 * k + 0.001 * l;
+    }, 0, n0, 0, n1, 0, n2, 0, n3);
+
+    std::cout << "Filled a " << n0 << "x" << n1 << "x" << n2 << "x" << n3
+              << " space (" << buffer.size() << " entries) from a single call.\n"
+              << "  buffer.front() = " << buffer.front()
+              << ", buffer.back() = " << buffer.back() << "\n\n";
+
+    // ---- Parallel: outer levels distributed over TBB -----------------------------
+
+    // metaForLoopParallel spreads the outermost levels across threads. Any levels
+    // beyond the third run serially inside each block, so the parallel region is
+    // created once rather than once per innermost iteration.
+    std::atomic<long> visited{0};
+
+    metaForLoopParallel([&](int i, int j, int k, int l) {
+        (void)i; (void)j; (void)k; (void)l;
+        visited.fetch_add(1, std::memory_order_relaxed);
+    }, 0, n0, 0, n1, 0, n2, 0, n3);
+
+    std::cout << "Parallel traversal visited " << visited.load()
+              << " points (expected " << static_cast<long>(n0) * n1 * n2 * n3 << ").\n";
+
+    return 0;
+}
