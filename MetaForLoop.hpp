@@ -13,28 +13,33 @@
 // permissions and limitations under the License.
 //
 //
-// DISCLAIMER: This is a version under active development and testing.
-// Not all features have been sufficiently tested, and several features
-// are only partially implemented. Moreover both the core and the interface
-// may change. You are discouraged from using this version to publish
-// results without the supervision of the developer.
-//
-// If you want, you are welcome to act as a beta tester. In that case
-// please contact Marco Battiato at:
-// battiato.marco@gmail.com
-//
-// Check if a newer, stable and tested version has, in the meanwhile,
-// been made available at:
-// https://github.com/MarcoBattiato/MetaForLoop
-//
-//
 //  MetaForLoop
 //
 //  Created by Marco Battiato on 20/4/24.
 //
+//  Generates arbitrarily deep nested loops from a single call, with the nesting
+//  depth fixed at compile time by the number of bounds supplied.
+//
+//      metaForLoop(f, 0,3, 0,4, 0,5);      //  equivalent to three nested for loops,
+//                                          //  calling f(i,j,k) for every combination
+//
+//  Bounds are passed as consecutive (begin, end) pairs; a static_assert enforces that
+//  they are supplied in pairs. The callable is invoked with one index per level, so
+//  its arity must match the number of pairs.
+//
+//  metaForLoopParallel is the parallel counterpart, distributing the outermost one,
+//  two or three levels over a TBB blocked range and running any deeper levels serially
+//  within each block.
+//
+//  Requires C++20 (concepts) and oneTBB for the parallel variants.
+//
 
 #ifndef MetaForLoop_hpp
 #define MetaForLoop_hpp
+
+#include <concepts>
+#include <cstddef>
+#include <iterator>
 
 #include "tbb/tbb.h"
 #include "tbb/blocked_range.h"
@@ -42,10 +47,12 @@
 
 namespace MetaForLoop {
 
+// Serial N-dimensional loop. Each recursion peels off one (begin, end) pair and binds
+// the corresponding index into the callable, so the innermost call sees all N indices.
 template<class Callable, std::incrementable Counter, std::convertible_to<Counter> ...C>
 constexpr void metaForLoop(Callable&& functToExecute, Counter start, Counter end, C&&... limits) {
     constexpr std::size_t nPar = sizeof...(C);
-    static_assert( !(nPar%2) );
+    static_assert( !(nPar%2), "Loop bounds must be supplied as (begin, end) pairs" );
     for(Counter i = start; i != end; ++i) {
         if constexpr(nPar == 0) {
             functToExecute(i);
@@ -58,10 +65,13 @@ constexpr void metaForLoop(Callable&& functToExecute, Counter start, Counter end
     }
 }
 
+// Parallel over the outermost three levels; deeper levels run serially inside each
+// block. Recursing into the parallel version here instead would open a fresh parallel
+// region for every innermost iteration, which costs far more than it gains.
 template<class Callable, std::incrementable Counter, std::convertible_to<Counter> ...C>
 constexpr void metaForLoopParallel(Callable&& functToExecute, Counter start0, Counter end0, Counter start1, Counter end1, Counter start2, Counter end2, C&&...limits) {
     constexpr std::size_t nPar = sizeof...(C);
-    static_assert( !(nPar% 2) );
+    static_assert( !(nPar% 2), "Loop bounds must be supplied as (begin, end) pairs" );
     tbb::parallel_for(
                       tbb::blocked_range3d<Counter>(start0, end0, start1, end1, start2, end2),
                       [&](tbb::blocked_range3d<Counter> range) {
@@ -74,7 +84,7 @@ constexpr void metaForLoopParallel(Callable&& functToExecute, Counter start0, Co
                                           auto bind_an_argument = [i,j,k, &functToExecute](auto... args) {
                                               functToExecute(i,j,k, args...);
                                           };
-                                          metaForLoopParallel(bind_an_argument, limits...);
+                                          metaForLoop(bind_an_argument, limits...);
                                       }
                                   }
                               }
@@ -82,6 +92,7 @@ constexpr void metaForLoopParallel(Callable&& functToExecute, Counter start0, Co
                       });
 }
 
+// Parallel over both levels of a two-dimensional iteration space.
 template<class Callable, std::incrementable Counter>
 constexpr void metaForLoopParallel(Callable&& functToExecute, Counter start0, Counter end0, Counter start1, Counter end1) {
     tbb::parallel_for(
@@ -95,6 +106,7 @@ constexpr void metaForLoopParallel(Callable&& functToExecute, Counter start0, Co
                       });
 }
 
+// Parallel over a single dimension.
 template<class Callable, std::incrementable Counter>
 constexpr void metaForLoopParallel(Callable&& functToExecute, Counter start0, Counter end0) {
     tbb::parallel_for(
